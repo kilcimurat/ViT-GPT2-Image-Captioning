@@ -5,7 +5,7 @@ This repository contains the implementation of a image captioning model using Vi
 ## Table of Contents
 - [Introduction](#introduction)
 - [Installation](#installation)
-- [Results](#results)
+- [Result](#result)
 - [Contributing](#contributing)
 - [License](#license)
 
