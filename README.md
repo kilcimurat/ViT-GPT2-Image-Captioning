@@ -67,6 +67,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## References
 
-For more details on the approach and methodology, please refer to the paper:
+For more details on the approach and methodology, please refer to the paper:  [https://www.amerikakongresi.org/_files/ugd/797a84_6c6dfe33b3334093907214838e7d9c1d.pdf].
 
-Kilci, Murat. "Fusion of High-Level Visual Attributes for Image Captioning." [https://dergipark.org.tr/tr/download/article-file/3345449].
+
+```
+@article{kilci2023fusion,
+  title={VISUAL TRANSFORMER AND GPT-2 BASED ENCODER-DECODER FRAMEWORK FOR AUTOMATED IMAGE CAPTIONING },
+  author={Kılcı, Murat and Meliha, Baştürk and Cayli, Özkan and Kılıç, Volkan},
+  journal=LATIN AMERICA 8th INTERNATIONAL CONFERENCE ON SCIENTIFIC RESEARCHES},
+  pages={330--338},
+  year={2024}
+}
+```
+
