@@ -7,7 +7,7 @@ This is the official codebase for paper: Visual Transformer and GPT-2 Based Enco
 @article{kilci2023fusion,
   title={Visual Transformer and GPT-2 Based Encoder-Decoder Framework for Automated Image Captioning },
   author={Kılcı, Murat and Meliha, Baştürk and Cayli, Özkan and Kılıç, Volkan},
-  journal={atin America 8th International Conference on Scientific Researches},
+  journal={Latin America 8th International Conference on Scientific Researches},
   pages={330--338},
   year={2024}
 }
