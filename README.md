@@ -1,4 +1,4 @@
-# vit_gpt2_image_captioning
+# ViT-GPT2 Image Captioning
 
 This is the official codebase for paper: Visual Transformer and GPT-2 Based Encoder-Decoder Framework for Automated Image Captioning [https://www.amerikakongresi.org/_files/ugd/797a84_6c6dfe33b3334093907214838e7d9c1d.pdf].
 
