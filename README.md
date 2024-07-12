@@ -1,13 +1,13 @@
 # vit_gpt2_image_captioning
 
-This is the official codebase for paper: VISUAL TRANSFORMER AND GPT-2 BASED ENCODER-DECODER FRAMEWORK FOR AUTOMATED IMAGE CAPTIONING [https://www.amerikakongresi.org/_files/ugd/797a84_6c6dfe33b3334093907214838e7d9c1d.pdf].
+This is the official codebase for paper: Visual Transformer and GPT-2 Based Encoder-Decoder Framework for Automated Image Captioning [https://www.amerikakongresi.org/_files/ugd/797a84_6c6dfe33b3334093907214838e7d9c1d.pdf].
 
 
 ```
 @article{kilci2023fusion,
-  title={VISUAL TRANSFORMER AND GPT-2 BASED ENCODER-DECODER FRAMEWORK FOR AUTOMATED IMAGE CAPTIONING },
+  title={Visual Transformer and GPT-2 Based Encoder-Decoder Framework for Automated Image Captioning },
   author={Kılcı, Murat and Meliha, Baştürk and Cayli, Özkan and Kılıç, Volkan},
-  journal=LATIN AMERICA 8th INTERNATIONAL CONFERENCE ON SCIENTIFIC RESEARCHES},
+  journal={atin America 8th International Conference on Scientific Researches},
   pages={330--338},
   year={2024}
 }
