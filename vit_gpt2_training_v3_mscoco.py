@@ -18,6 +18,8 @@ from torch.optim import AdamW
 
 import re
 
+from qformer import QFormer
+
 torch.manual_seed(3)
 torch.cuda.manual_seed(3)
 torch.cuda.manual_seed_all(3)
@@ -49,8 +51,9 @@ config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
 
 gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
 gpt2_model = gpt2_model.to(DEVICE)
+q_former = QFormer().to(DEVICE)
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+optimizer = AdamW(list(gpt2_model.parameters()) + list(q_former.parameters()), lr=5e-5)
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 
@@ -59,15 +62,22 @@ criterion = torch.nn.CrossEntropyLoss(ignore_index=gpt2_tokenizer.pad_token_id)
 
 def train_epoch(model, optimizer):
     model.train()
+    q_former.train()
     losses = 0
 
     for i, (image_feature, input_ids, attention_mask) in tqdm(enumerate(train_loader)):
-        
+
         image_feature = image_feature.to(DEVICE)
         attention_mask = attention_mask.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
+        image_feature = q_former(image_feature)
 
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, encoder_hidden_states=image_feature)
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            encoder_hidden_states=image_feature,
+        )
         loss = outputs.loss
         loss.backward()
         optimizer.step()
@@ -86,6 +96,7 @@ def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=g
 def generate_captions(model, src):
     max_len = 30
     batch_size = src.shape[0]
+    src = q_former(src)
     encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
     generated = encoding["input_ids"].to(DEVICE)
     attention_mask = encoding["attention_mask"].to(DEVICE)
@@ -106,6 +117,7 @@ def generate_captions(model, src):
 
 def test_epoch(model, best_score, epoch):
     model.eval()
+    q_former.eval()
     data = []
     with torch.no_grad():
         for i, (src, ids) in tqdm(enumerate(val_loader)):  
