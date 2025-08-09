@@ -1,6 +1,6 @@
 import torch
 
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -32,30 +32,35 @@ BOS_TOKEN = "bos"
 EOS_TOKEN = "eos"
 UNK_TOKEN = "unk"
 
-gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
-gpt2_tokenizer.pad_token_id = gpt2_tokenizer.eos_token_id
-# gpt2_tokenizer.pad_token = PAD_TOKEN
-# gpt2_tokenizer.bos_token = BOS_TOKEN
-# gpt2_tokenizer.eos_token = EOS_TOKEN
-# gpt2_tokenizer.unk_token = UNK_TOKEN
-train_loader, val_loader, test_loader = get_loader_and_vocab(dt, tokenizer=gpt2_tokenizer)
+# Select a larger language model to improve caption quality.
+# You can change MODEL_NAME to other causal language models such as
+# "gpt2-xl", "EleutherAI/gpt-neo-2.7B", etc.
+MODEL_NAME = "gpt2-large"
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
+# tokenizer.pad_token = PAD_TOKEN
+# tokenizer.bos_token = BOS_TOKEN
+# tokenizer.eos_token = EOS_TOKEN
+# tokenizer.unk_token = UNK_TOKEN
+train_loader, val_loader, test_loader = get_loader_and_vocab(dt, tokenizer=tokenizer)
 
 annotation_file = dt.val_captions
 annotation_name = str(annotation_file.parts[-1][:-5])
 coco = COCO(str(annotation_file))
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
+config = AutoConfig.from_pretrained(MODEL_NAME, add_cross_attention=True)
 
-gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
-gpt2_model = gpt2_model.to(DEVICE)
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, config=config)
+model = model.to(DEVICE)
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+optimizer = AdamW(model.parameters(), lr=5e-5)
 
-writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
+writer = SummaryWriter(comment=f"______|vit|{MODEL_NAME}|{dt.name}|")
 
 
-criterion = torch.nn.CrossEntropyLoss(ignore_index=gpt2_tokenizer.pad_token_id)
+criterion = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
 def train_epoch(model, optimizer):
     model.train()
@@ -77,7 +82,7 @@ def train_epoch(model, optimizer):
     return epoch_loss
 
 
-def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=gpt2_tokenizer.eos_token, pad_token=gpt2_tokenizer.pad_token):
+def clean_caption_regex(caption, bos_token=tokenizer.bos_token, eos_token=tokenizer.eos_token, pad_token=tokenizer.pad_token):
     pattern = f"({bos_token}|{eos_token}|{pad_token})"
     clean = re.sub(pattern, '', caption)
     clean = clean.strip()
@@ -86,7 +91,7 @@ def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=g
 def generate_captions(model, src):
     max_len = 30
     batch_size = src.shape[0]
-    encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
+    encoding = tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
     generated = encoding["input_ids"].to(DEVICE)
     attention_mask = encoding["attention_mask"].to(DEVICE)
     for _ in range(max_len):
@@ -98,7 +103,7 @@ def generate_captions(model, src):
         # Update the attention mask to include the new token
         new_attention_mask = torch.ones((batch_size, 1), dtype=torch.long, device=generated.device)
         attention_mask = torch.cat((attention_mask, new_attention_mask), dim=1)
-    generated_texts = [gpt2_tokenizer.decode(g, skip_special_tokens=True) for g in generated]
+    generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in generated]
     return generated_texts
 
 
@@ -146,10 +151,10 @@ NUM_EPOCHS = 40
 BEST_CIDER_SCORE = 0.0
 for epoch in range(1, NUM_EPOCHS+1):
     start_time = timer()
-    train_loss = train_epoch(gpt2_model, optimizer)
+    train_loss = train_epoch(model, optimizer)
     writer.add_scalar(f'Train loss', train_loss, epoch)
     end_time = timer()
-    BEST_CIDER_SCORE = test_epoch(gpt2_model, BEST_CIDER_SCORE, epoch)
+    BEST_CIDER_SCORE = test_epoch(model, BEST_CIDER_SCORE, epoch)
     print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "f"Epoch time = {(end_time - start_time):.3f}s"))
     with open('best_cider_score.txt', 'w') as file:
         file.write(f"Best CIDEr Score: {BEST_CIDER_SCORE}")
