@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
 
@@ -32,7 +33,8 @@ BOS_TOKEN = "bos"
 EOS_TOKEN = "eos"
 UNK_TOKEN = "unk"
 
-gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+gpt2_model_name = 'gpt2-large'
+gpt2_tokenizer = GPT2Tokenizer.from_pretrained(gpt2_model_name)
 gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
 gpt2_tokenizer.pad_token_id = gpt2_tokenizer.eos_token_id
 # gpt2_tokenizer.pad_token = PAD_TOKEN
@@ -45,25 +47,34 @@ annotation_file = dt.val_captions
 annotation_name = str(annotation_file.parts[-1][:-5])
 coco = COCO(str(annotation_file))
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
+config = GPT2Config.from_pretrained(gpt2_model_name, add_cross_attention=True)
 
-gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
+gpt2_model = GPT2LMHeadModel.from_pretrained(gpt2_model_name, config=config)
 gpt2_model = gpt2_model.to(DEVICE)
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+# determine feature size and project if necessary
+sample_feature = next(iter(train_loader))[0]
+feature_size = sample_feature.shape[-1]
+if feature_size != gpt2_model.config.hidden_size:
+    image_proj = nn.Linear(feature_size, gpt2_model.config.hidden_size).to(DEVICE)
+    optimizer = AdamW(list(gpt2_model.parameters()) + list(image_proj.parameters()), lr=5e-5)
+else:
+    image_proj = nn.Identity().to(DEVICE)
+    optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 
 
 criterion = torch.nn.CrossEntropyLoss(ignore_index=gpt2_tokenizer.pad_token_id)
 
-def train_epoch(model, optimizer):
+
+def train_epoch(model, optimizer, image_proj):
     model.train()
     losses = 0
 
     for i, (image_feature, input_ids, attention_mask) in tqdm(enumerate(train_loader)):
-        
-        image_feature = image_feature.to(DEVICE)
+
+        image_feature = image_proj(image_feature.to(DEVICE))
         attention_mask = attention_mask.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
 
@@ -83,7 +94,8 @@ def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=g
     clean = clean.strip()
     return clean
 
-def generate_captions(model, src):
+def generate_captions(model, src, image_proj):
+    src = image_proj(src)
     max_len = 30
     batch_size = src.shape[0]
     encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
@@ -104,15 +116,15 @@ def generate_captions(model, src):
 
     
 
-def test_epoch(model, best_score, epoch):
+def test_epoch(model, best_score, epoch, image_proj):
     model.eval()
     data = []
     with torch.no_grad():
-        for i, (src, ids) in tqdm(enumerate(val_loader)):  
+        for i, (src, ids) in tqdm(enumerate(val_loader)):
             src = src.to(DEVICE)
 
-            
-            captions = generate_captions(model, src)
+
+            captions = generate_captions(model, src, image_proj)
 
             for caption, id in zip(captions, ids):
                 data.append({
@@ -146,10 +158,10 @@ NUM_EPOCHS = 150
 BEST_CIDER_SCORE = 0.0
 for epoch in range(1, NUM_EPOCHS+1):
     start_time = timer()
-    train_loss = train_epoch(gpt2_model, optimizer)
+    train_loss = train_epoch(gpt2_model, optimizer, image_proj)
     writer.add_scalar(f'Train loss', train_loss, epoch)
     end_time = timer()
-    BEST_CIDER_SCORE = test_epoch(gpt2_model, BEST_CIDER_SCORE, epoch)
+    BEST_CIDER_SCORE = test_epoch(gpt2_model, BEST_CIDER_SCORE, epoch, image_proj)
     print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "f"Epoch time = {(end_time - start_time):.3f}s"))
     with open('best_cider_score.txt', 'w') as file:
         file.write(f"Best CIDEr Score: {BEST_CIDER_SCORE}")
