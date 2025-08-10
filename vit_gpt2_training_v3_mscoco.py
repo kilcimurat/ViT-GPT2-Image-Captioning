@@ -49,8 +49,10 @@ config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
 
 gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
 gpt2_model = gpt2_model.to(DEVICE)
+projector = torch.nn.Linear(768, gpt2_model.config.n_embd)
+projector = projector.to(DEVICE)
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+optimizer = AdamW(list(gpt2_model.parameters()) + list(projector.parameters()), lr=5e-5)
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 
@@ -62,10 +64,11 @@ def train_epoch(model, optimizer):
     losses = 0
 
     for i, (image_feature, input_ids, attention_mask) in tqdm(enumerate(train_loader)):
-        
+
         image_feature = image_feature.to(DEVICE)
         attention_mask = attention_mask.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
+        image_feature = projector(image_feature)
 
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, encoder_hidden_states=image_feature)
         loss = outputs.loss
@@ -86,6 +89,7 @@ def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=g
 def generate_captions(model, src):
     max_len = 30
     batch_size = src.shape[0]
+    src = projector(src)
     encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
     generated = encoding["input_ids"].to(DEVICE)
     attention_mask = encoding["attention_mask"].to(DEVICE)
