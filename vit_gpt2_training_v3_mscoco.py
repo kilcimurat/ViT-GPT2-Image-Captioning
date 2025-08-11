@@ -5,10 +5,8 @@ from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
 from torch.utils.tensorboard import SummaryWriter
 
 from prepare_mscoco_dataset import MSCOCODataset
-from prepare_vizwiz_dataset import VizWizDataset
 
 from data_utils import get_loader_and_vocab
-import math
 from tqdm.auto import tqdm
 import json
 from pycocotools.coco import COCO
