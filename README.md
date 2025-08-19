@@ -13,7 +13,7 @@ This is the official codebase for paper: Visual Transformer and GPT-2 Based Enco
 }
 ```
 
-This repository contains the implementation of a image captioning model using Vision Transformer (ViT) and GPT-2. The model is designed to generate descriptive captions for images by leveraging the strengths of both image and language processing.
+This repository contains the implementation of an image captioning model using a Vision Transformer (ViT) and GPT-2. The model now includes a Transformer-based Query Former that bridges visual features and the language model, enabling more effective cross-modal learning and improved caption quality.
 
 ## Table of Contents
 - [Introduction](#introduction)

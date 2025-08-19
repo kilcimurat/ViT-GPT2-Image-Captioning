@@ -1,6 +1,7 @@
 import torch
 
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
+from q_former import QFormer
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -47,27 +48,36 @@ coco = COCO(str(annotation_file))
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
 
-gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
-gpt2_model = gpt2_model.to(DEVICE)
+gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config).to(DEVICE)
+q_former = QFormer().to(DEVICE)
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+optimizer = AdamW(
+    list(gpt2_model.parameters()) + list(q_former.parameters()), lr=5e-5
+)
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 
 
 criterion = torch.nn.CrossEntropyLoss(ignore_index=gpt2_tokenizer.pad_token_id)
 
-def train_epoch(model, optimizer):
+def train_epoch(model, q_former, optimizer):
     model.train()
+    q_former.train()
     losses = 0
 
     for i, (image_feature, input_ids, attention_mask) in tqdm(enumerate(train_loader)):
         
         image_feature = image_feature.to(DEVICE)
+        image_feature = q_former(image_feature)
         attention_mask = attention_mask.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
 
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, encoder_hidden_states=image_feature)
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            encoder_hidden_states=image_feature,
+        )
         loss = outputs.loss
         loss.backward()
         optimizer.step()
@@ -83,14 +93,19 @@ def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=g
     clean = clean.strip()
     return clean
 
-def generate_captions(model, src):
+def generate_captions(model, q_former, src):
     max_len = 30
     batch_size = src.shape[0]
-    encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
+    encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors="pt")
     generated = encoding["input_ids"].to(DEVICE)
     attention_mask = encoding["attention_mask"].to(DEVICE)
+    src_features = q_former(src)
     for _ in range(max_len):
-        outputs = model(input_ids=generated, encoder_hidden_states=src, attention_mask=attention_mask)
+        outputs = model(
+            input_ids=generated,
+            encoder_hidden_states=src_features,
+            attention_mask=attention_mask,
+        )
         predictions = outputs.logits
         next_token_logits = predictions[:, -1, :]
         next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
@@ -104,15 +119,14 @@ def generate_captions(model, src):
 
     
 
-def test_epoch(model, best_score, epoch):
+def test_epoch(model, q_former, best_score, epoch):
     model.eval()
+    q_former.eval()
     data = []
     with torch.no_grad():
         for i, (src, ids) in tqdm(enumerate(val_loader)):  
             src = src.to(DEVICE)
-
-            
-            captions = generate_captions(model, src)
+            captions = generate_captions(model, q_former, src)
 
             for caption, id in zip(captions, ids):
                 data.append({
@@ -144,12 +158,12 @@ def test_epoch(model, best_score, epoch):
 from timeit import default_timer as timer
 NUM_EPOCHS = 150
 BEST_CIDER_SCORE = 0.0
-for epoch in range(1, NUM_EPOCHS+1):
+for epoch in range(1, NUM_EPOCHS + 1):
     start_time = timer()
-    train_loss = train_epoch(gpt2_model, optimizer)
-    writer.add_scalar(f'Train loss', train_loss, epoch)
+    train_loss = train_epoch(gpt2_model, q_former, optimizer)
+    writer.add_scalar(f"Train loss", train_loss, epoch)
     end_time = timer()
-    BEST_CIDER_SCORE = test_epoch(gpt2_model, BEST_CIDER_SCORE, epoch)
+    BEST_CIDER_SCORE = test_epoch(gpt2_model, q_former, BEST_CIDER_SCORE, epoch)
     print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "f"Epoch time = {(end_time - start_time):.3f}s"))
     with open('best_cider_score.txt', 'w') as file:
         file.write(f"Best CIDEr Score: {BEST_CIDER_SCORE}")
