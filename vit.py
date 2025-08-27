@@ -12,12 +12,20 @@ class ViT(nn.Module):
         self.model = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
         self.processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
 
-    def forward(self, images):
-        """Run CLIP preprocessing followed by the vision encoder."""
+    def forward(self, images, return_patch_embeddings: bool = False):
+        """Run CLIP preprocessing followed by the vision encoder.
+
+        Args:
+            images: A batch of images accepted by ``CLIPImageProcessor``.
+            return_patch_embeddings: If ``True`` return the full patch token
+                embeddings. Otherwise return the pooled CLS representation.
+        """
         device = next(self.model.parameters()).device
         inputs = self.processor(images=images, return_tensors="pt").to(device)
         outputs = self.model(**inputs)
-        return outputs.last_hidden_state
+        if return_patch_embeddings:
+            return outputs.last_hidden_state
+        return outputs.pooler_output
 
 
 # model = ViT()
