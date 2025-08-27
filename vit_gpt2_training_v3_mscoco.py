@@ -1,155 +1,163 @@
+"""Fine-tune BLIP-2 on MSCOCO with multi-GPU support and beam search decoding."""
+
+import json
+from pathlib import Path
+
 import torch
-
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config
-
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader, Dataset
+from PIL import Image
+from transformers import Blip2ForConditionalGeneration, Blip2Processor
+from torch.optim import AdamW
+from tqdm import tqdm
 
 from prepare_mscoco_dataset import MSCOCODataset
-from prepare_vizwiz_dataset import VizWizDataset
-
-from data_utils import get_loader_and_vocab
-import math
-from tqdm import tqdm
-import json
 from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
 
-from torch.optim import AdamW
 
-import re
-
+# Reproducibility
 torch.manual_seed(3)
-torch.cuda.manual_seed(3)
 torch.cuda.manual_seed_all(3)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-#dt = VizWizDataset()
+
 dt = MSCOCODataset()
+processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = Blip2ForConditionalGeneration.from_pretrained("Salesforce/blip2-opt-2.7b")
+model = model.to(DEVICE)
+if torch.cuda.device_count() > 1:
+    model = torch.nn.DataParallel(model)
 
-PAD_TOKEN = "pos"
-BOS_TOKEN = "bos"
-EOS_TOKEN = "eos"
-UNK_TOKEN = "unk"
+optimizer = AdamW(model.parameters(), lr=1e-5)
 
-gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
-gpt2_tokenizer.pad_token_id = gpt2_tokenizer.eos_token_id
-# gpt2_tokenizer.pad_token = PAD_TOKEN
-# gpt2_tokenizer.bos_token = BOS_TOKEN
-# gpt2_tokenizer.eos_token = EOS_TOKEN
-# gpt2_tokenizer.unk_token = UNK_TOKEN
-train_loader, val_loader, test_loader = get_loader_and_vocab(dt, tokenizer=gpt2_tokenizer)
 
 annotation_file = dt.val_captions
-annotation_name = str(annotation_file.parts[-1][:-5])
+annotation_name = Path(annotation_file).stem
 coco = COCO(str(annotation_file))
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
 
-gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
-gpt2_model = gpt2_model.to(DEVICE)
-
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
-
-writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
+train_data, val_data, _ = dt.load_data()
+train_paths, train_captions, _ = zip(*train_data)
+val_paths, val_ids = zip(*val_data)
 
 
-criterion = torch.nn.CrossEntropyLoss(ignore_index=gpt2_tokenizer.pad_token_id)
+class TrainDataset(Dataset):
+    def __init__(self, paths, captions, root):
+        self.paths = paths
+        self.captions = captions
+        self.root = root
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        img_path = self.root / f"{self.paths[idx]}.jpg"
+        image = Image.open(img_path).convert("RGB")
+        caption = self.captions[idx]
+        return image, caption
+
+
+class ValDataset(Dataset):
+    def __init__(self, paths, ids, root):
+        self.paths = paths
+        self.ids = ids
+        self.root = root
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx):
+        img_path = self.root / f"{self.paths[idx]}.jpg"
+        image = Image.open(img_path).convert("RGB")
+        return image, self.ids[idx]
+
+
+def train_collate(batch):
+    images, captions = zip(*batch)
+    inputs = processor(images=list(images), text=list(captions), padding=True, return_tensors="pt")
+    inputs["labels"] = inputs["input_ids"].clone()
+    return inputs
+
+
+def val_collate(batch):
+    images, ids = zip(*batch)
+    inputs = processor(images=list(images), return_tensors="pt")
+    return inputs, ids
+
+
+train_loader = DataLoader(
+    TrainDataset(train_paths, train_captions, dt.train_folder),
+    batch_size=16,
+    shuffle=True,
+    num_workers=8,
+    collate_fn=train_collate,
+)
+
+val_loader = DataLoader(
+    ValDataset(val_paths, val_ids, dt.val_folder),
+    batch_size=32,
+    shuffle=False,
+    num_workers=8,
+    collate_fn=val_collate,
+)
+
 
 def train_epoch(model, optimizer):
     model.train()
     losses = 0
-
-    for i, (image_feature, input_ids, attention_mask) in tqdm(enumerate(train_loader)):
-        
-        image_feature = image_feature.to(DEVICE)
-        attention_mask = attention_mask.to(DEVICE)
-        input_ids = input_ids.to(DEVICE)
-
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, encoder_hidden_states=image_feature)
+    for batch in tqdm(train_loader):
+        batch = {k: v.to(DEVICE) for k, v in batch.items()}
+        outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
         losses += loss.item()
-    epoch_loss = losses / (i + 1)
-    return epoch_loss
+    return losses / len(train_loader)
 
 
-def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=gpt2_tokenizer.eos_token, pad_token=gpt2_tokenizer.pad_token):
-    pattern = f"({bos_token}|{eos_token}|{pad_token})"
-    clean = re.sub(pattern, '', caption)
-    clean = clean.strip()
-    return clean
+def generate_captions(model, pixel_values):
+    model_to_use = model.module if isinstance(model, torch.nn.DataParallel) else model
+    generated_ids = model_to_use.generate(pixel_values=pixel_values, num_beams=5, max_new_tokens=30)
+    return processor.batch_decode(generated_ids, skip_special_tokens=True)
 
-def generate_captions(model, src):
-    max_len = 30
-    batch_size = src.shape[0]
-    encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
-    generated = encoding["input_ids"].to(DEVICE)
-    attention_mask = encoding["attention_mask"].to(DEVICE)
-    for _ in range(max_len):
-        outputs = model(input_ids=generated, encoder_hidden_states=src, attention_mask=attention_mask)
-        predictions = outputs.logits
-        next_token_logits = predictions[:, -1, :]
-        next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
-        generated = torch.cat((generated, next_token), dim=1)
-        # Update the attention mask to include the new token
-        new_attention_mask = torch.ones((batch_size, 1), dtype=torch.long, device=generated.device)
-        attention_mask = torch.cat((attention_mask, new_attention_mask), dim=1)
-    generated_texts = [gpt2_tokenizer.decode(g, skip_special_tokens=True) for g in generated]
-    return generated_texts
-
-
-    
 
 def test_epoch(model, best_score, epoch):
     model.eval()
     data = []
     with torch.no_grad():
-        for i, (src, ids) in tqdm(enumerate(val_loader)):  
-            src = src.to(DEVICE)
+        for batch, ids in tqdm(val_loader):
+            pixel_values = batch["pixel_values"].to(DEVICE)
+            captions = generate_captions(model, pixel_values)
+            for caption, img_id in zip(captions, ids):
+                data.append({"image_id": img_id, "caption": caption})
 
-            
-            captions = generate_captions(model, src)
-
-            for caption, id in zip(captions, ids):
-                data.append({
-                    "image_id": id.item(),
-                    "caption" : caption[4:]
-                })
-    
     json_file = f"results/{annotation_name}_result.json"
-    with open(json_file, "w") as file:
-        json.dump(data, file)
-    
+    with open(json_file, "w") as f:
+        json.dump(data, f)
+
     coco_result = coco.loadRes(json_file)
     coco_eval = COCOEvalCap(coco, coco_result)
-    coco_eval.params['image_id'] = coco_result.getImgIds()
+    coco_eval.params["image_id"] = coco_result.getImgIds()
     coco_eval.evaluate()
 
-    # print output evaluation scores
     for metric, score in coco_eval.eval.items():
-        print(f'{metric}: {score:.3f}')
-        writer.add_scalar(f'{metric} Val Score', score, epoch)
-        if metric == "CIDEr":
-            if score > best_score:
-                best_score = score
-                json_file = f"results/best_{annotation_name}_result.json"
-                with open(json_file, "w") as file:
-                    json.dump(data, file)
-    
+        print(f"{metric}: {score:.3f}")
+        if metric == "CIDEr" and score > best_score:
+            best_score = score
+            with open(f"results/best_{annotation_name}_result.json", "w") as f:
+                json.dump(data, f)
+
     return best_score
-from timeit import default_timer as timer
+
+
 NUM_EPOCHS = 40
 BEST_CIDER_SCORE = 0.0
-for epoch in range(1, NUM_EPOCHS+1):
-    start_time = timer()
-    train_loss = train_epoch(gpt2_model, optimizer)
-    writer.add_scalar(f'Train loss', train_loss, epoch)
-    end_time = timer()
-    BEST_CIDER_SCORE = test_epoch(gpt2_model, BEST_CIDER_SCORE, epoch)
-    print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "f"Epoch time = {(end_time - start_time):.3f}s"))
-    with open('best_cider_score.txt', 'w') as file:
-        file.write(f"Best CIDEr Score: {BEST_CIDER_SCORE}")
+for epoch in range(1, NUM_EPOCHS + 1):
+    train_loss = train_epoch(model, optimizer)
+    BEST_CIDER_SCORE = test_epoch(model, BEST_CIDER_SCORE, epoch)
+    print(f"Epoch: {epoch}, Train loss: {train_loss:.3f}")
+    with open("best_cider_score.txt", "w") as f:
+        f.write(f"Best CIDEr Score: {BEST_CIDER_SCORE}")
+

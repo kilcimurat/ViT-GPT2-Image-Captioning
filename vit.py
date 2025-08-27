@@ -1,17 +1,24 @@
-import torch
-import torchvision.transforms as T
+"""Vision transformer wrapper built on top of CLIP ViT‑L/14."""
+
+from transformers import CLIPImageProcessor, CLIPVisionModel
 import torch.nn as nn
-import timm
 
 
 class ViT(nn.Module):
-    def __init__(self, pretrained=True) -> None:
-        super(ViT, self).__init__()
-        self.model = timm.create_model('vit_base_patch16_224', pretrained=pretrained)
+    """Expose the CLIP ViT-L/14 encoder for feature extraction."""
 
-    def forward(self, x):
-        x = self.model.forward_features(x)
-        return x
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14")
+        self.processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
+
+    def forward(self, images):
+        """Run CLIP preprocessing followed by the vision encoder."""
+        device = next(self.model.parameters()).device
+        inputs = self.processor(images=images, return_tensors="pt").to(device)
+        outputs = self.model(**inputs)
+        return outputs.last_hidden_state
+
 
 # model = ViT()
 # torch.save(model.cpu(), "vit_model.pt")
