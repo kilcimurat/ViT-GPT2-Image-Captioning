@@ -18,6 +18,8 @@ from torch.optim import AdamW
 
 import re
 
+from gpu_utils import CudaMultiGPU
+
 torch.manual_seed(3)
 torch.cuda.manual_seed(3)
 torch.cuda.manual_seed_all(3)
@@ -44,13 +46,13 @@ train_loader, val_loader, test_loader = get_loader_and_vocab(dt, tokenizer=gpt2_
 annotation_file = dt.val_captions
 annotation_name = str(annotation_file.parts[-1][:-5])
 coco = COCO(str(annotation_file))
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
 
 gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
-gpt2_model = gpt2_model.to(DEVICE)
+gpt2_model = CudaMultiGPU(gpt2_model)
+DEVICE = gpt2_model.device
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+optimizer = AdamW(gpt2_model.model.parameters(), lr=5e-5)
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 
