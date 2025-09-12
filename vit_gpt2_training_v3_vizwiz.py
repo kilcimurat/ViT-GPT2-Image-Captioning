@@ -52,7 +52,7 @@ gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
 gpt2_model = CudaMultiGPU(gpt2_model)
 DEVICE = gpt2_model.device
 
-optimizer = AdamW(gpt2_model.model.parameters(), lr=5e-5)
+optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 

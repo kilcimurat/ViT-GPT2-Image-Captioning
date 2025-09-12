@@ -35,9 +35,10 @@ class CudaMultiGPU:
 
     Notes
     -----
-    The :class:`CudaMultiGPU` instance is itself callable and forwards all
-    provided arguments to the wrapped model.  The underlying model can also be
-    accessed through the :attr:`model` attribute if direct access is preferred.
+    The :class:`CudaMultiGPU` instance is itself callable and forwards both
+    method calls and attribute access to the wrapped model.  The underlying
+    model can also be accessed through the :attr:`model` attribute if direct
+    access is preferred.
     """
 
     def __init__(self, model: torch.nn.Module, verbose: bool = True) -> None:
@@ -57,6 +58,9 @@ class CudaMultiGPU:
 
     def __call__(self, *args, **kwargs):
         return self.model(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
 
 
 if __name__ == "__main__":  # pragma: no cover - usage demonstration
