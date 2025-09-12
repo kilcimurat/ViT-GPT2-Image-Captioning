@@ -69,8 +69,14 @@ def train_epoch(model, optimizer):
         attention_mask = attention_mask.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
 
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, encoder_hidden_states=image_feature)
-        loss = outputs.loss
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            encoder_hidden_states=image_feature,
+        )
+        # DataParallel gathers a loss per GPU; average to keep scalar
+        loss = outputs.loss.mean()
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
