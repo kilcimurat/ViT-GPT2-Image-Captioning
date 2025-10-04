@@ -8,6 +8,7 @@ from prepare_mscoco_dataset import MSCOCODataset
 from prepare_vizwiz_dataset import VizWizDataset
 
 from data_utils import get_loader_and_vocab
+from qformer import QFormerBridge
 import math
 from tqdm import tqdm
 import json
@@ -50,24 +51,42 @@ config = GPT2Config.from_pretrained('gpt2', add_cross_attention=True)
 gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2', config=config)
 gpt2_model = gpt2_model.to(DEVICE)
 
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
+qformer_bridge = QFormerBridge(hidden_size=gpt2_model.config.n_embd, num_queries=32, num_layers=4, num_heads=gpt2_model.config.n_head)
+qformer_bridge = qformer_bridge.to(DEVICE)
+
+optimizer = AdamW([
+    {"params": gpt2_model.parameters(), "lr": 5e-5},
+    {"params": qformer_bridge.parameters(), "lr": 1e-4},
+])
 
 writer = SummaryWriter(comment=f"______|vit|gpt_2|{dt.name}|")
 
 
 criterion = torch.nn.CrossEntropyLoss(ignore_index=gpt2_tokenizer.pad_token_id)
 
-def train_epoch(model, optimizer):
+
+def train_epoch(model, bridge, optimizer):
     model.train()
+    bridge.train()
     losses = 0
 
     for i, (image_feature, input_ids, attention_mask) in tqdm(enumerate(train_loader)):
         
         image_feature = image_feature.to(DEVICE)
+        visual_attention_mask = torch.ones(image_feature.size()[:2], dtype=torch.long, device=DEVICE)
         attention_mask = attention_mask.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
 
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids, encoder_hidden_states=image_feature)
+        bridged_embeddings = bridge(image_feature, visual_attention_mask)
+        encoder_attention_mask = bridge.get_encoder_attention_mask(image_feature)
+
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=input_ids,
+            encoder_hidden_states=bridged_embeddings,
+            encoder_attention_mask=encoder_attention_mask,
+        )
         loss = outputs.loss
         loss.backward()
         optimizer.step()
@@ -83,14 +102,22 @@ def clean_caption_regex(caption, bos_token=gpt2_tokenizer.bos_token, eos_token=g
     clean = clean.strip()
     return clean
 
-def generate_captions(model, src):
+def generate_captions(model, bridge, src):
     max_len = 30
     batch_size = src.shape[0]
     encoding = gpt2_tokenizer([BOS_TOKEN] * batch_size, return_tensors='pt')
     generated = encoding["input_ids"].to(DEVICE)
     attention_mask = encoding["attention_mask"].to(DEVICE)
+    visual_attention_mask = torch.ones(src.size()[:2], dtype=torch.long, device=DEVICE)
+    bridged_embeddings = bridge(src, visual_attention_mask)
+    encoder_attention_mask = bridge.get_encoder_attention_mask(src)
     for _ in range(max_len):
-        outputs = model(input_ids=generated, encoder_hidden_states=src, attention_mask=attention_mask)
+        outputs = model(
+            input_ids=generated,
+            attention_mask=attention_mask,
+            encoder_hidden_states=bridged_embeddings,
+            encoder_attention_mask=encoder_attention_mask,
+        )
         predictions = outputs.logits
         next_token_logits = predictions[:, -1, :]
         next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
@@ -104,15 +131,15 @@ def generate_captions(model, src):
 
     
 
-def test_epoch(model, best_score, epoch):
+def test_epoch(model, bridge, best_score, epoch):
     model.eval()
+    bridge.eval()
     data = []
     with torch.no_grad():
         for i, (src, ids) in tqdm(enumerate(val_loader)):  
             src = src.to(DEVICE)
 
-            
-            captions = generate_captions(model, src)
+            captions = generate_captions(model, bridge, src)
 
             for caption, id in zip(captions, ids):
                 data.append({
@@ -146,10 +173,10 @@ NUM_EPOCHS = 40
 BEST_CIDER_SCORE = 0.0
 for epoch in range(1, NUM_EPOCHS+1):
     start_time = timer()
-    train_loss = train_epoch(gpt2_model, optimizer)
+    train_loss = train_epoch(gpt2_model, qformer_bridge, optimizer)
     writer.add_scalar(f'Train loss', train_loss, epoch)
     end_time = timer()
-    BEST_CIDER_SCORE = test_epoch(gpt2_model, BEST_CIDER_SCORE, epoch)
+    BEST_CIDER_SCORE = test_epoch(gpt2_model, qformer_bridge, BEST_CIDER_SCORE, epoch)
     print((f"Epoch: {epoch}, Train loss: {train_loss:.3f}, "f"Epoch time = {(end_time - start_time):.3f}s"))
     with open('best_cider_score.txt', 'w') as file:
         file.write(f"Best CIDEr Score: {BEST_CIDER_SCORE}")
